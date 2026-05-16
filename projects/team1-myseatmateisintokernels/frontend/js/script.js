@@ -6,9 +6,6 @@ import {
 	resetSeraSprite,
 	showThinkingDots,
 	hideThinkingDots,
-	flashAffinityVignette,
-	showEventToast,
-	clearSuggestions,
 	ensureHUD,
 	updateHUD,
 	hideHUD,
@@ -16,11 +13,17 @@ import {
 	pushRecentMessagesToDialogLog,
 	clearDialogLogDom,
 	ensureLogButton,
-	typewriteAndAwait
+	typewriteAndAwait,
+	showEndCredits,
+	showEndingImage,
+	lockToBlack
 } from './ui.js';
+import { startSseStream, playChatTypewriter } from './chat-stream.js';
 import { bootstrapSessionOnce, fetchEndingContent } from './api.js';
-import { setGameActive, chatStreamState } from './game-flow.js';
-import { API_BASE, SCENE_BG_KEY, CHAT_RESUME_LABELS, escapeDialogText } from './constants.js';
+import { saveEndingClear } from './ending-dex.js';
+import { setGameActive, chatStreamState, finalizeEndingCleanup } from './game-flow.js';
+import { API_BASE, escapeDialogText, ENDING_BG_FADE_MS, ENDING_BG_FADE_OUT_MS, SCENE_BG_KEY, SCENE_FILE } from './constants.js';
+import { bgm } from './audio.js';
 
 // ─── Monogatari 등록 ───────────────────────────────────────────────────────────
 
@@ -44,34 +47,10 @@ monogatari.action ('notification').notifications ({
 });
 
 monogatari.assets ('images', {
-	'sera_first': '이세라 첫등장.png'
+	'sera_first': 'sera_first.png'
 });
 
-monogatari.assets ('scenes', {
-	'blank_white':     'blank_white.svg',
-	'fade_black':      'fade_black.svg',
-	'bedroom_dawn':    'bedroom_dawn.svg',
-	'apartment_door':  'apartment_door.svg',
-	'train_interior':  'metro.png',
-	'posttower_lobby': 'center_1floor.png',
-	'elevator_panel':  'elevator_panel.svg',
-	'center_hall':     'entrance.png',
-	's1_room':         'entrance.png',
-
-	// === SceneId 기반 플레이스홀더 배경 (§1.4.2) ===
-	'scene_project_plan_evaluation': 'scene_project_plan_evaluation.svg',
-	'scene_launch_ceremony':         'scene_launch_ceremony.svg',
-	'scene_mid_evaluation':          'scene_mid_evaluation.svg',
-	'scene_deep_dev':                'scene_deep_dev.svg',
-	'scene_final_evaluation':        'scene_final_evaluation.svg',
-	'scene_graduation_busan':        'scene_graduation_busan.svg',
-	'scene_ending_instant_bad':       'scene_ending_instant_bad.svg',
-	'scene_ending_bad':               'scene_ending_bad.svg',
-	'scene_ending_normal_no_contact': 'scene_ending_normal_no_contact.svg',
-	'scene_ending_normal_contact':    'scene_ending_normal_contact.svg',
-	'scene_ending_happy':             'scene_ending_happy.svg',
-	'scene_ending_marriage':          'scene_ending_marriage.svg'
-});
+monogatari.assets ('scenes', SCENE_FILE);
 
 monogatari.characters ({
 	'p': {
@@ -94,8 +73,7 @@ monogatari.characters ({
 	}
 });
 
-monogatari.translation ('English', {
-	'보내기': '보내기',
+monogatari.translation ('한국어', {
 	'↑': '↑'
 });
 
@@ -107,10 +85,7 @@ monogatari.script ({
 		// 인트로 직전 — blank_white SVG 로 즉시 흰 배경.
 		'show scene blank_white',
 		// 인트로 로고 오버레이.
-		async function () {
-			await showIntroLogo ();
-			return true;
-		},
+		showIntroLogo,
 		// 인트로 끝나면 검은 배경으로 페이드.
 		'show scene fade_black with fadeIn',
 		'jump NewGame'
@@ -143,7 +118,6 @@ monogatari.script ({
 			}
 		},
 
-		// === 씬 2: 아침 기상 ===
 		'show scene bedroom_dawn with fadeIn',
 		'4월 13일, 월요일. 화창한 아침.',
 		'또로로롱~ 오니쨩~! 일어날 시간이에요!!',
@@ -154,9 +128,6 @@ monogatari.script ({
 		'저벅… 저벅… 툭. 샤아아아아—',
 		'…툭. 위이이이잉… 딸깍. 툭.',
 		'p 하아… 이제야 좀 상쾌하네. 오늘은 처음 센터에 가는 날이니까 빨리 준비해야지.',
-
-		// === 씬 3: 출근길 ===
-		'show scene apartment_door with fadeIn',
 		'철컥— 현관문이 닫힌다.',
 
 		'show scene train_interior with fadeIn',
@@ -164,16 +135,11 @@ monogatari.script ({
 		'p 이건 탈 때마다 왜 이리 시끄러워…',
 		'끼이이익… 덜컹… 슈우우우욱.',
 
-		// === 씬 4: 포스트타워 진입 ===
 		'show scene posttower_lobby with fadeIn',
 		'저벅… 저벅…',
 		'p 오, 여기가 소마 건물이구나. 7층이었지, 아마?',
+		'건물로 들어간다.',
 
-		'show scene elevator_panel with fadeIn',
-		'7층 버튼을 누른다.',
-		'띵— 문이 열린다.',
-
-		// === 씬 5: 7층 센터 홀 ===
 		'show scene center_hall with fadeIn',
 		'p 오오! 이곳이 센터구나. 안이 생각보다 훨씬 깔끔한걸?',
 		'운 좋게 소프트웨어 마에스트로에 합격한 나는, 워크숍이 끝나고 처음으로 센터에 발을 들였다.',
@@ -185,7 +151,6 @@ monogatari.script ({
 		'p 이야, 벌써 서로 안면을 텄구나. 나도 워크숍 때 좀 잘할걸 그랬네…',
 		'p 아니야, 지금도 늦지 않았어. 열심히 네트워킹하자!',
 
-		// === 씬 6: S1 룸 첫 조우 ===
 		'show scene s1_room with fadeIn',
 		'— S1 룸 —',
 		'p 아, 여기가 그곳이구나! 내가 면접 봤던 곳… 그땐 좁아 보였는데, 벽을 치우니까 엄청 넓네.',
@@ -201,9 +166,7 @@ monogatari.script ({
 		'jump SCENE_FIRST_MEET'
 	],
 
-	// === 소마 일정 씬 (§1.4.2 SceneId) ===
-	// 구조: [<프롤로그>, 'jump LLMChat', <에필로그>, gotoNextScene]
-
+	// 구조: [<프롤로그>, 'jump LLMChatInit', <에필로그>, gotoNextScene]
 	'SCENE_FIRST_MEET': [
 		'show character y calm with fadeIn',
 		'p 그때 워크숍 때 봤던 사람이잖아…? 다시 봐도 정말 눈에 띄네.',
@@ -234,7 +197,7 @@ monogatari.script ({
 		'y 잘 부탁드려요, {{player.name}}씨.',
 		'p 반갑습니다…!',
 		'p (어색한 첫 인사는 끝났다. 이제 뭐라고 말을 꺼내지…)',
-		'jump LLMChat',
+		'jump LLMChatInit',
 		// === 에필로그 ===
 		'show character y happy',
 		'어색하면서도 즐거웠던 첫 대화. 우리는 어쩌다 같은 팀이 되기로 했다.',
@@ -249,7 +212,7 @@ monogatari.script ({
 		'며칠 후, 첫 번째 관문인 기획 심의 날이 다가왔다.',
 		'p 드디어 발표 날이네… 잘할 수 있을까?',
 		'y 긴장돼요? 우리 충분히 준비했으니까 괜찮을 거예요.',
-		'jump LLMChat',
+		'jump LLMChatInit',
 		// === 에필로그 ===
 		'show character y happy',
 		'무사히 기획 심의를 마치고, 우리는 다음 일정으로 향했다.',
@@ -260,11 +223,11 @@ monogatari.script ({
 
 	'SCENE_LAUNCH_CEREMONY': [
 		'show scene scene_launch_ceremony with fadeIn',
-		'show character y shy with fadeIn',
+		'show character y excited with fadeIn',
 		'정장 차림의 사람들로 가득 찬 회장. 발대식이 시작되려 한다.',
 		'p 이렇게 사람이 많을 줄이야…',
 		'y 우와… 진짜 정식으로 시작되는 느낌이네요.',
-		'jump LLMChat',
+		'jump LLMChatInit',
 		'show character y excited',
 		'발대식이 끝나고, 우리는 본격적인 개발 모드로 들어갔다.',
 		'y 자! 이제부터 진짜 시작이에요!',
@@ -278,7 +241,7 @@ monogatari.script ({
 		'어느새 중간 평가가 다가왔다.',
 		'p 벌써 중간 평가네… 시간 진짜 빠르다.',
 		'y 그러게요… 잘 해봐요, 우리.',
-		'jump LLMChat',
+		'jump LLMChatInit',
 		'show character y sad',
 		'길고 긴 중간 평가가 끝났다.',
 		'y 후… 멘토님들 질문이 진짜 매서웠네요.',
@@ -292,11 +255,11 @@ monogatari.script ({
 		'마감이 다가오자 우리는 센터에서 밤을 새기로 했다.',
 		'y 새벽까지 코딩이라니… 좀 떨려요.',
 		'p 카페인 챙겨왔어. 같이 끝내자!',
-		'jump LLMChat',
+		'jump LLMChatInit',
 		'show character y happy',
 		'동이 트는 창밖을 바라보며, 우리는 마지막 커밋을 푸시했다.',
 		'y 우리… 진짜 해냈네요…',
-		'p 응. 같이라서 가능했어.',
+		'p 응. 함께라서 가능했어.',
 		gotoNextScene
 	],
 
@@ -306,7 +269,7 @@ monogatari.script ({
 		'마지막 발표의 날. 모두의 시선이 우리에게 모였다.',
 		'p 여기까지 왔구나… 잘하자!',
 		'y 우리가 만든 거, 그대로 보여주기만 하면 돼요.',
-		'jump LLMChat',
+		'jump LLMChatInit',
 		'show character y excited',
 		'박수 소리와 함께 발표가 끝났다.',
 		'y 진짜 끝났다… 믿기지 않아요.',
@@ -320,11 +283,18 @@ monogatari.script ({
 		'부산행 KTX. 차창 밖으로 흘러가는 풍경이 어쩐지 아쉽다.',
 		'y 부산이라니… 진짜 마지막 같아요.',
 		'p 그러게… 1년이 진짜 빨리 갔다.',
-		'jump LLMChat',
-		'show character y shy',
-		'수료식이 끝나고, 우리는 광안리 바닷가에 섰다.',
-		'y {{player.name}}씨… 그동안 정말 즐거웠어요.',
+		'jump LLMChatInit',
+		'show character y calm',
+		'행사가 끝났다. 1년이 지나간 것이, 실감이 나지 않았다.',
+		'y 이제 진짜 끝이네요…',
 		gotoNextScene
+	],
+
+	// 개발용 LLMChatInit 진입 씬
+	'DevStart' : [
+		'show scene s1_room',
+		'show character y calm',
+		'jump LLMChatInit'
 	],
 
 	// 씬 전환 디스패처 — LLMChat Conditional 의 'transition' 분기에서 진입.
@@ -341,7 +311,7 @@ monogatari.script ({
 		}
 	],
 
-	'LLMChat': [
+	'LLMChatInit': [
 		async function () {
 			const boot = this.storage ('boot') || {};
 			const game = this.storage ('game') || {};
@@ -358,7 +328,6 @@ monogatari.script ({
 				affinity: typeof game.affinity === 'number' ? game.affinity : 0
 			});
 			resetSeraSprite ();
-			ensureLogButton ();
 
 			if (boot.mode === 'resume' || boot.mode === 'loaded-slot') {
 				const recent = Array.isArray (boot.recent_messages) ? boot.recent_messages : [];
@@ -376,7 +345,6 @@ monogatari.script ({
 				if (llmStorage.emotion) updateSeraSprite (llmStorage.emotion);
 				this.storage ({ boot: Object.assign ({}, boot, { mode: boot.mode + '-played' }) });
 			}
-			clearSuggestions ();
 
 			const prevLLM = this.storage ('llm') || {};
 			this.storage ({
@@ -386,10 +354,12 @@ monogatari.script ({
 					event_id: ''
 				})
 			});
-			monogatari.state ({ label: 'LLMChat', step: 0 });
 			return true;
 		},
+		'jump LLMChatLoop'
+	],
 
+	'LLMChatLoop': [
 		{
 			'Input': {
 				'Text': '',
@@ -428,7 +398,6 @@ monogatari.script ({
 						body: JSON.stringify ({ message: prompt })
 					});
 
-					clearSuggestions ();
 					return true;
 				},
 				'Revert': function () {
@@ -457,258 +426,53 @@ monogatari.script ({
 				console.warn ('[chat] skipped stale chat step without a pending stream');
 				const prevLLM = this.storage ('llm') || {};
 				this.storage ({
-					llm: Object.assign ({}, prevLLM, {
-						prompt: '',
-						response: '',
-						event_id: ''
-					})
+					llm: Object.assign ({}, prevLLM, { prompt: '', response: '', event_id: '' })
 				});
 				return true;
 			}
 			showThinkingDots ();
+			const stream = startSseStream (chatStreamState.pending);
+			chatStreamState.pending = null;
 
-			let textBuffer = '';
-			let streamComplete = false;
-			let metaArrived = false;
-			let nextSceneId = null;
-			let triggeredEventId = null;
-			let lastState = null;
-
-			const handleSseEvent = (event, payload) => {
-				const evtKey = String (event || '').toLowerCase ();
-				switch (evtKey) {
-					case 'meta':
-						if (payload?.emotion) updateSeraSprite (payload.emotion);
-						metaArrived = true;
-						hideThinkingDots ();
-						break;
-					case 'delta':
-					case 'message':
-						if (typeof payload?.text === 'string') textBuffer += payload.text;
-						else if (typeof payload?.chunk === 'string') textBuffer += payload.chunk;
-						else if (typeof payload?.content === 'string') textBuffer += payload.content;
-						else if (typeof payload?.delta === 'string') textBuffer += payload.delta;
-						break;
-					case 'state':
-						lastState = payload || {};
-						if (lastState.emotion) updateSeraSprite (lastState.emotion);
-						flashAffinityVignette (typeof lastState.affinity_delta === 'number' ? lastState.affinity_delta : 0);
-						updateHUD ({
-							progress: typeof lastState.progress === 'number' ? lastState.progress : undefined,
-							affinity: typeof lastState.affinity === 'number' ? lastState.affinity : undefined
-						});
-						break;
-					case 'event_trigger':
-						triggeredEventId = payload?.event_id || null;
-						if (triggeredEventId) showEventToast (triggeredEventId);
-						break;
-					case 'scene_transition':
-						nextSceneId = payload?.next_scene_id || null;
-						console.log ('[SSE scene_transition]', JSON.stringify (payload));
-						break;
-					case 'error':
-						if (!textBuffer) {
-							textBuffer = '지금은 연결이 좀 불안정한 것 같아요. 잠시 후에 다시 말을 걸어주실래요?';
-						}
-						break;
-					default:
-						console.warn ('[chat] 처리되지 않은 SSE 이벤트:', event, payload);
-				}
-			};
-
-			const parseSseBlock = (block, doneRef) => {
-				let evt = 'message';
-				let dataStr = '';
-				for (const rawLine of block.split (/\r?\n/)) {
-					const line = rawLine;
-					if (line.startsWith ('event:')) evt = line.slice (6).trim ();
-					else if (line.startsWith ('data:')) {
-						const part = line.slice (5).replace (/^\s/, '');
-						dataStr += (dataStr ? '\n' : '') + part;
-					}
-				}
-				if (evt === 'end') { doneRef.done = true; return; }
-				if (!dataStr) return;
-				let payload;
-				try { payload = JSON.parse (dataStr); }
-				catch (e) {
-					console.warn ('[chat] SSE data JSON parse 실패:', dataStr.slice (0, 200));
-					return;
-				}
-				handleSseEvent (evt, payload);
-			};
-
-			try {
-				const response = await chatStreamState.pending;
-				chatStreamState.pending = null;
-				if (!response.ok) throw new Error (`HTTP ${response.status}`);
-
-				const reader = response.body.getReader ();
-				const decoder = new TextDecoder ();
-
-				(async () => {
-					try {
-						let buf = '';
-						const doneRef = { done: false };
-						let processedAny = false;
-						while (!doneRef.done) {
-							const { done: d, value } = await reader.read ();
-							if (d) break;
-							buf += decoder.decode (value, { stream: true });
-							const blocks = buf.split (/\r?\n\r?\n/);
-							buf = blocks.pop () || '';
-							for (const block of blocks) {
-								if (!block.trim ()) continue;
-								parseSseBlock (block, doneRef);
-								processedAny = true;
-								if (doneRef.done) break;
-							}
-						}
-						buf += decoder.decode ();
-						if (buf.trim ()) {
-							for (const block of buf.split (/\r?\n\r?\n/)) {
-								if (!block.trim ()) continue;
-								parseSseBlock (block, doneRef);
-								processedAny = true;
-							}
-						}
-					} catch (e) {
-						console.error ('[chat] stream read error:', e);
-					}
-					streamComplete = true;
-				}) ();
-			} catch (error) {
-				console.error ('[chat] fetch failed:', error);
-				textBuffer = '지금은 연결이 좀 불안정한 것 같아요. 잠시 후에 다시 말을 걸어주실래요?';
-				streamComplete = true;
-			}
-
-			while (!metaArrived && !streamComplete && textBuffer.length === 0) {
+			while (!stream.metaArrived && !stream.done && stream.buffer.length === 0) {
 				await new Promise (r => setTimeout (r, 50));
 			}
 			hideThinkingDots ();
 			sayEl.innerHTML = '';
 
-			const PAGE_BREAK_THRESHOLD = 80;
-			let typed = 0;
-			let pageText = '';
-			let skipToBreak = false;
+			await playChatTypewriter (sayEl, stream);
 
-			let pageState = 'typing';
-			let resolveAdvance = null;
-
-			const handleInteract = (e) => {
-				if (e.type === 'keydown') {
-					if (e.isComposing || e.keyCode === 229) return;
-					if (!['Enter', ' ', 'ArrowRight'].includes (e.key)) return;
-				}
-				if (e.type === 'click' && e.target?.closest?.('text-input, button, select, input, textarea, .llm-suggestions')) return;
-				if (e.type === 'keydown') e.preventDefault ();
-				if (pageState === 'typing') {
-					skipToBreak = true;
-				} else if (pageState === 'waiting' && resolveAdvance) {
-					resolveAdvance ();
-					resolveAdvance = null;
-				}
-			};
-			document.addEventListener ('click', handleInteract);
-			document.addEventListener ('keydown', handleInteract);
-
-			const waitForAdvance = () => {
-				pageState = 'waiting';
-				if (sayEl) sayEl.classList.add ('say--awaiting');
-				return new Promise (r => { resolveAdvance = r; });
-			};
-			const finishWait = () => {
-				if (sayEl) sayEl.classList.remove ('say--awaiting');
-			};
-
-			const skipLeadingWhitespace = () => {
-				while (typed < textBuffer.length && ' \n\r\t'.includes (textBuffer[typed])) typed++;
-			};
-
-			while (typed >= textBuffer.length && !streamComplete) {
-				await new Promise (r => setTimeout (r, 10));
-			}
-			skipLeadingWhitespace ();
-
-			while (true) {
-				if (typed >= textBuffer.length) {
-					if (streamComplete) break;
-					await new Promise (r => setTimeout (r, 10));
-					continue;
-				}
-
-				const ch = textBuffer[typed++];
-				pageText += ch;
-				sayEl.innerHTML = escapeDialogText (pageText);
-
-				let dwell = 0;
-				if (/[.!?。！？]/.test (ch)) dwell = 70;
-				else if (ch === '…' || ch === '⋯') dwell = 180;
-				else if (/[,、]/.test (ch)) dwell = 35;
-
-				if (/[.!?。！？]/.test (ch) && pageText.length >= PAGE_BREAK_THRESHOLD) {
-					if (typed >= textBuffer.length && !streamComplete) {
-						await new Promise (r => setTimeout (r, 50));
-					}
-					const next = textBuffer[typed];
-					if (!next || next === ' ' || next === '\n') {
-						await waitForAdvance ();
-						finishWait ();
-						skipToBreak = false;
-						pageState = 'typing';
-						pageText = '';
-						sayEl.innerHTML = '';
-						skipLeadingWhitespace ();
-					}
-				}
-
-				if (!skipToBreak) {
-					await new Promise (r => setTimeout (r, 30 + dwell));
-				}
-			}
-
-			if (pageText.trim ()) {
-				await waitForAdvance ();
-				finishWait ();
-			}
-
-			document.removeEventListener ('click', handleInteract);
-			document.removeEventListener ('keydown', handleInteract);
-
-			if (textBuffer.trim ()) {
+			if (stream.buffer.trim ()) {
 				pushDialogLog ({
 					id: 'y',
 					name: '이세라',
 					color: '#ffb7d8',
-					dialog: escapeDialogText (textBuffer)
+					dialog: escapeDialogText (stream.buffer)
 				});
 			}
 
-			if (lastState) {
-				const prevGame = this.storage ('game') || {};
+			const prevGame = this.storage ('game') || {};
+			if (stream.lastState) {
+				const s = stream.lastState;
 				this.storage ({
 					game: {
-						affinity:        typeof lastState.affinity      === 'number' ? lastState.affinity      : prevGame.affinity      || 0,
-						affinity_delta:  typeof lastState.affinity_delta === 'number' ? lastState.affinity_delta : 0,
-						progress:        typeof lastState.progress      === 'number' ? lastState.progress      : prevGame.progress      || 0,
-						chat_count:      typeof lastState.chat_count    === 'number' ? lastState.chat_count    : prevGame.chat_count    || 0,
+						affinity:         typeof s.affinity       === 'number' ? s.affinity       : prevGame.affinity      || 0,
+						affinity_delta:   typeof s.affinity_delta  === 'number' ? s.affinity_delta  : 0,
+						progress:         typeof s.progress        === 'number' ? s.progress        : prevGame.progress      || 0,
+						chat_count:       typeof s.chat_count      === 'number' ? s.chat_count      : prevGame.chat_count    || 0,
 						current_scene_id: prevGame.current_scene_id || 'SCENE_FIRST_MEET'
 					}
 				});
 			}
 
-			const prevGameForLLM = this.storage ('game') || {};
-			const prevSceneForTransition = nextSceneId ? (prevGameForLLM.current_scene_id || '') : '';
 			this.storage ({
 				llm: {
-					prompt: this.storage ('llm').prompt,
-					response: textBuffer,
-					emotion: lastState?.emotion || 'NEUTRAL',
-					event_id: triggeredEventId || '',
-					next_scene_id: nextSceneId || '',
-					prev_scene_id: prevSceneForTransition
+					prompt:        this.storage ('llm').prompt,
+					response:      stream.buffer,
+					emotion:       stream.lastState?.emotion || 'NEUTRAL',
+					event_id:      stream.triggeredEventId || '',
+					next_scene_id: stream.nextSceneId || '',
+					prev_scene_id: stream.nextSceneId ? (prevGame.current_scene_id || '') : ''
 				}
 			});
 
@@ -722,45 +486,162 @@ monogatari.script ({
 					if (llm.next_scene_id) return 'transition';
 					return 'continue';
 				},
-				'continue': 'jump LLMChat',
+				'continue': 'jump LLMChatLoop',
 				'transition': 'jump _TransitionDispatch'
 			}
 		}
 	],
 
-	'LLMEnd': [
+	// 모든 엔딩의 진입점 — HUD 숨김 후 배경 전환하여 해당 엔딩 씬으로 점프.
+	// 호감도 30+ 의 두 해피엔딩(HAPPY/MARRIAGE)은 광안리 바닷가에서, 그 외는 수료식 배경에서 대사 진행.
+	'Ending': [
 		async function () {
-			clearSuggestions ();
 			hideThinkingDots ();
 			hideHUD ();
-
 			const game = this.storage ('game') || {};
 			const sceneId = game.current_scene_id || '';
-			const bgKey = SCENE_BG_KEY[sceneId];
-			if (bgKey) {
-				try { await monogatari.run ('show scene ' + bgKey + ' with fadeIn', false); } catch (e) {}
+			const isHappy = (sceneId === 'SCENE_ENDING_HAPPY' || sceneId === 'SCENE_ENDING_MARRIAGE');
+			const isInstantBad = (sceneId === 'SCENE_ENDING_INSTANT_BAD');
+			if (isHappy) bgm ('gwanganli');
+			if (!isInstantBad) {
+				const introBg = isHappy ? 'scene_beach_gwangalli' : 'scene_graduation_busan';
+				try { await monogatari.run ('show scene ' + introBg + ' with fadeIn', false); } catch (e) {}
 			}
+			const label = (sceneId.startsWith('SCENE_') ? sceneId.slice(6) : 'ENDING_BAD');
+			monogatari.state ({ label, step: -1 });
+			return true;
+		}
+	],
+
+	// 즉시 베드엔딩 — 호감도 -100 인터럽트
+	'ENDING_INSTANT_BAD': [
+		'show character y angry with fadeIn',
+		'y 잠깐만요.',
+		'y 저, 지금 이 대화 더 이상 이어가기 힘들 것 같아요.',
+		'show character y disgust',
+		'y 솔직히 말할게요. 이 자리에 계속 있고 싶지 않아요.',
+		'그녀는 자리에서 일어나 가방을 챙겼다.',
+		'hide character y with fadeOut',
+		'어떤 말도 그녀의 발걸음을 붙잡지 못했다.',
+		'문이 닫혔다. 그게 전부였다.',
+		'우리의 이야기는, 그렇게 끝났다.',
+		'jump EndingImageHold'
+	],
+
+	// 일반 배드엔딩 — 호감도 ≤ -30
+	'ENDING_BAD': [
+		'show character y sad with fadeIn',
+		'수료식이 끝나고, 짧은 인사를 나눴다.',
+		'y 수고하셨어요.',
+		'p 어… 너도.',
+		'그뿐이었다.',
+		'hide character y with fadeOut',
+		'그 후로 연락은 없었다. 서로의 번호가 연락처에 남아 있었지만, 아무도 먼저 전화하지 않았다.',
+		'어느 날 우연히 그녀의 SNS를 검색했는데, 차단되어 있었다.',
+		'그제야 실감이 났다. 우리 사이는, 정말로 끝난 거라고.',
+		'jump EndingImageHold'
+	],
+
+	// 노멀엔딩 1 — 연락 없음 (-29 ≤ 호감도 ≤ 0)
+	'ENDING_NORMAL_NO_CONTACT': [
+		'show character y calm with fadeIn',
+		'수료식이 끝났다. 우리는 웃으며 짧게 인사를 나눴다.',
+		'y 같이 해서 좋았어요. 수고하셨어요!',
+		'p 저도요. 덕분에 잘 마무리됐어요.',
+		'hide character y with fadeOut',
+		'그것으로 끝이었다.',
+		'서로의 번호는 알고 있었지만, 굳이 먼저 연락할 이유는 없었다.',
+		'그녀와의 1년. 좋은 팀원이었고, 함께 만든 것도 있었다.',
+		'그냥, 그게 전부였다.',
+		'jump EndingImageHold'
+	],
+
+	// 노멀엔딩 2 — 가끔 연락 (1 ≤ 호감도 ≤ 29)
+	'ENDING_NORMAL_CONTACT': [
+		'show character y calm with fadeIn',
+		'수료식이 끝나고, 우리는 서로 연락처를 다시 확인했다.',
+		'y 가끔 연락해요! 밥도 먹고, 커피도 마시고.',
+		'p 그래. 나도 연락할게.',
+		'show character y happy',
+		'y 그럼 잘 지내요, {{player.name}}씨!',
+		'p 응, 너도 잘 지내.',
+		'hide character y with fadeOut',
+		'그 후로 우리는 가끔 안부를 전했다. 명절 연락, 취업 소식, 새 프로젝트 이야기…',
+		'특별하지는 않았지만, 잊지 않는 사이.',
+		'그것도 충분히 소중한 인연이었다.',
+		'jump EndingImageHold'
+	],
+
+	// 해피엔딩 — 30 ≤ 호감도 ≤ 99
+	'ENDING_HAPPY': [
+		'show character y shy with fadeIn',
+		'수료식이 끝난 저녁, 광안리 바닷가.',
+		'파도 소리가 두 사람 사이로 조용히 흘렀다.',
+		'y 있잖아요, {{player.name}}씨…',
+		'p 응?',
+		'y 이거 끝나고도… 자주 볼 수 있을까요?',
+		'p 물론이지. 왜, 보고 싶어?',
+		'y 조금… 많이.',
+		'p 하, 나도.',
+		'파도 소리가 두 사람의 웃음 속에 섞였다.',
+		'hide character y with fadeOut',
+		'그날 이후로도 우리는 계속 만났다. 주말마다, 때로는 평일에도.',
+		'사람들은 물었다. 연인이냐고.',
+		'우리는 대답하지 않았다. 그냥, 이대로가 충분히 좋았으니까.',
+		'jump EndingImageHold'
+	],
+
+	// 결혼 해피엔딩 — 호감도 ≥ 100
+	// 흐름: 광안리 바닷가에서 대사(스프라이트 포함) → 고백 일러(클릭 대기) →
+	//       검은 화면으로 페이드, 2년 후 narration → 결혼식 일러(클릭 대기) → 크레딧.
+	'ENDING_MARRIAGE': [
+		'show character y shy with fadeIn',
+		'수료식 날 저녁, 광안리 바닷가의 노을 아래.',
+		'y {{player.name}}씨, 저 드릴 말씀이 있어요.',
+		'p 응? 갑자기?',
+		'y 저는요… 이 1년 동안, {{player.name}}씨가 제일 좋았어요. 그 어느 것보다.',
+		'p 나도야.',
+		'y 그럼 앞으로도 같이 있어줄래요? 오래오래.',
+		'p 같이 있는 거야? 아니면…',
+		'y 같이 있는 거예요. 계속, 영원히.',
+		'p 응. 같이 있자.',
+		'노을이 두 사람을 물들였다. 파도 소리도, 갈매기 소리도, 세상의 모든 것이 멀어진 것 같았다.',
+		'hide character y with fadeOut',
+		'show scene fade_black with fadeIn',
+		// 1번째 일러 — 고백 장면
+		() => showEndingImage ('scene_ending_marriage_confession', ENDING_BG_FADE_MS, ENDING_BG_FADE_OUT_MS),
+		function () { bgm (null); return true; },
+		// 시간 경과 narration
+		'그로부터 2년 뒤, 가을.',
+		'그녀는 드레스를 입고 복도 끝에 서 있었다.',
+		'웨딩마치가 울렸다.',
+		function () { bgm ('marr'); return true; },
+		// 2번째 일러 — 결혼식 장면
+		() => showEndingImage ('scene_ending_marriage_wedding', ENDING_BG_FADE_MS, ENDING_BG_FADE_OUT_MS),
+		'jump EndCredits'
+	],
+
+	// 엔딩 대사 종료 후 — 엔딩 이미지 표시, 클릭 한 번 대기 후 크레딧으로 진행
+	'EndingImageHold': [
+		'show scene fade_black with fadeIn',
+		async function () {
+			const game = this.storage ('game') || {};
+			const bgKey = SCENE_BG_KEY[game.current_scene_id || ''];
+			if (bgKey) await showEndingImage (bgKey, ENDING_BG_FADE_MS, ENDING_BG_FADE_OUT_MS);
+			return true;
+		},
+		'jump EndCredits'
+	],
+
+	// 엔딩 크레딧 — 최종 통계 오버레이
+	'EndCredits': [
+		async function () {
+			lockToBlack ();
 			const ending = await fetchEndingContent ();
-			if (!ending) {
-				await typewriteAndAwait ('다음에 또 이야기해요, ' + ((this.storage ('player') || {}).name || '플레이어') + '씨.', { who: '이세라' });
-				return true;
-			}
-			if (ending.title) {
-				await typewriteAndAwait (`— ${ending.title} —`, { who: '' });
-			}
-			if (ending.narrative) {
-				const sentences = String (ending.narrative).split (/(?<=[\.\?\!。！？])\s+/);
-				let buf = '';
-				for (const s of sentences) {
-					if ((buf + ' ' + s).trim ().length > 120 && buf) {
-						await typewriteAndAwait (buf.trim (), { who: '' });
-						buf = s;
-					} else {
-						buf = (buf ? buf + ' ' : '') + s;
-					}
-				}
-				if (buf.trim ()) await typewriteAndAwait (buf.trim (), { who: '' });
-			}
+			const playerName = (this.storage ('player') || {}).name || '플레이어';
+			if (ending) saveEndingClear (ending, playerName);
+			await showEndCredits (ending, playerName);
+			await finalizeEndingCleanup ();
 			return true;
 		},
 		'end'

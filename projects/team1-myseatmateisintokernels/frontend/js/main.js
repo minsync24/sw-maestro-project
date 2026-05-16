@@ -1,4 +1,6 @@
 import { Monogatari, monogatari } from './engine.js';
+import { ensureLogButton } from './ui.js';
+import { ensureMainBtn } from './lifecycle.js';
 
 // side-effect imports — 모듈 평가 시점에 Monogatari 등록·리스너·훅이 설치됨.
 import './options.js';
@@ -18,6 +20,7 @@ if (window.location.protocol !== 'file:') {
 
 $_ready (() => {
 	monogatari.init ('#monogatari').then (() => {
-		// Monogatari 초기화 완료.
+		ensureLogButton ();
+		ensureMainBtn ();
 	});
 });

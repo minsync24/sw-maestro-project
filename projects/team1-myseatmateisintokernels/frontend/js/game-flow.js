@@ -1,15 +1,15 @@
 import { monogatari } from './engine.js';
-import { SAVE_SLOT_KEY, CHAT_RESUME_LABELS, API_BASE } from './constants.js';
+import { SAVE_SLOT_KEY, API_BASE } from './constants.js';
 import {
 	fetchSessionMe,
 	postSessionsCreate,
 	fetchResume,
+	deleteSession,
 	resetSessionBootstrapFlag,
 	setSessionBootstrapped
 } from './api.js';
 import {
 	hideHUD,
-	clearSuggestions,
 	hideThinkingDots,
 	closeLogViewer,
 	isLogViewerOpen,
@@ -35,16 +35,36 @@ export function setGameActive (active) {
 	else document.body.classList.remove ('game-active');
 }
 
+// 브라우저에서 게임 시작 시 자동 풀스크린.
+// 반드시 user gesture(클릭/키 입력) 안에서 호출되어야 함 — 그래서 메뉴 클릭 핸들러에서 호출한다.
+// 이미 풀스크린이거나, Electron 등 API 미지원/실패 시엔 조용히 무시.
+export function enterFullscreen () {
+	if (document.fullscreenElement) return;
+	const el = document.documentElement;
+	const req = el.requestFullscreen
+		|| el.webkitRequestFullscreen
+		|| el.mozRequestFullScreen
+		|| el.msRequestFullscreen;
+	if (!req) return;
+	try {
+		const p = req.call (el);
+		if (p && typeof p.catch === 'function') {
+			p.catch (e => console.debug ('[fullscreen] request rejected:', e?.message || e));
+		}
+	} catch (e) {
+		console.debug ('[fullscreen] request error:', e?.message || e);
+	}
+}
+
 export function cleanupCustomUI () {
 	setGameActive (false);
 	cancelPendingAutoSave ();
 	if (shouldAutoSaveScriptState ()) saveResumeSlot ('quit');
 	monogatari.global ('playing', false);
-	clearSuggestions ();
 	hideThinkingDots ();
 	hideHUD ();
 	if (isLogViewerOpen ()) closeLogViewer ();
-	document.querySelectorAll ('.log-button, .event-toast, .affinity-vignette').forEach (n => n.remove ());
+	document.querySelectorAll ('.event-toast, .affinity-vignette').forEach (n => n.remove ());
 	document.querySelectorAll ('.main-menu-overlay, .confirm-modal').forEach (n => n.remove ());
 	document.querySelectorAll ('text-input').forEach (n => n.remove ());
 	const sayEl = document.querySelector ('[data-ui="say"]');
@@ -62,6 +82,17 @@ export function cleanupCustomUI () {
 		bgEl.style.transition = '';
 	}
 	// menu.js 의 refreshSomaMainMenu 는 lifecycle 훅에서 MutationObserver 가 호출.
+}
+
+export async function finalizeEndingCleanup () {
+	cancelPendingAutoSave ();
+	monogatari.global ('playing', false);
+	try { await monogatari.Storage.remove (SAVE_SLOT_KEY); } catch (e) {}
+	try { await monogatari.Storage.remove ('AutoSave_1'); } catch (e) {}
+	await deleteSession ();
+	resetSessionBootstrapFlag ();
+	document.dispatchEvent (new CustomEvent ('soma:refresh-menu'));
+	document.dispatchEvent (new CustomEvent ('soma:refresh-ending-list'));
 }
 
 export async function engineStart () {
@@ -87,7 +118,6 @@ export async function engineStart () {
 export async function handleNewGame () {
 	console.debug ('[new-game] handleNewGame entry');
 	try {
-		cleanupCustomUI ();
 		const me = await fetchSessionMe ();
 		const beHasSession = !!(me?.has_session);
 		const localHasSave = await hasLocalAutoSave ();
@@ -95,6 +125,8 @@ export async function handleNewGame () {
 			const ok = await confirmReset ();
 			if (!ok) return;
 		}
+		enterFullscreen ();
+		cleanupCustomUI ();
 		try {
 			const res = await postSessionsCreate (true);
 			if (!res.ok) console.warn ('[new-game] /sessions 응답 비정상:', res.status);
@@ -121,6 +153,7 @@ export async function handleNewGame () {
 //   (4) Neither: alert.
 export async function handleResume () {
 	console.debug ('[resume] entry');
+	enterFullscreen ();
 	try {
 		document.querySelectorAll ('text-input').forEach (n => n.remove ());
 
@@ -200,7 +233,7 @@ export async function handleResume () {
 		const gameScreen = document.querySelector ('#monogatari [data-screen="game"]');
 		if (gameScreen && typeof gameScreen.setState === 'function') gameScreen.setState ({ open: true });
 
-		if (CHAT_RESUME_LABELS.has (restoredLabel)) {
+		if (restoredLabel.startsWith ('LLMChat')) {
 			const prevLLM = monogatari.storage ('llm') || {};
 			const prevBoot = monogatari.storage ('boot') || {};
 			monogatari.storage ({
@@ -214,7 +247,7 @@ export async function handleResume () {
 					recent_messages: recentMessages
 				})
 			});
-			monogatari.state ({ label: 'LLMChat', step: 0 });
+			monogatari.state ({ label: 'LLMChatInit', step: 0 });
 		}
 
 		const labels = monogatari.label ();
@@ -229,6 +262,34 @@ export async function handleResume () {
 	} catch (err) {
 		console.error ('[resume] unhandled error:', err);
 		alert ('이어 하기 처리 중 오류가 발생했어요. 콘솔을 확인해주세요.\n\n' + (err?.message || err));
+	}
+}
+
+export async function handleDevStart () {
+	console.debug ('[dev-start] entry');
+	enterFullscreen ();
+	try {
+		cleanupCustomUI ();
+		try {
+			const res = await postSessionsCreate (true);
+			if (!res.ok) console.warn ('[dev-start] /sessions 응답 비정상:', res.status);
+		} catch (e) {
+			console.warn ('[dev-start] /sessions 호출 실패 (BE 미가용?):', e);
+		}
+		try { await monogatari.Storage.remove (SAVE_SLOT_KEY); } catch (e) {}
+		try { await monogatari.Storage.remove ('AutoSave_1'); } catch (e) {}
+		try { await monogatari.resetGame (); } catch (e) {}
+		monogatari.storage ({
+			player: { name: 'dev' },
+			sera:   { name: '이세라' }
+		});
+		monogatari.state ({ step: 0, label: 'DevStart' });
+		resetSessionBootstrapFlag ();
+		console.debug ('[dev-start] jumping to DevStart');
+		await engineStart ();
+	} catch (err) {
+		console.error ('[dev-start] unhandled error:', err);
+		alert ('[DEV] DevStart 진입 실패. 콘솔을 확인해주세요.');
 	}
 }
 

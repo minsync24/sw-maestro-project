@@ -1,6 +1,9 @@
 import { installScriptAutoSaveHook } from './save.js';
-import { cleanupCustomUI } from './game-flow.js';
+import { cleanupCustomUI, handleSomaQuit } from './game-flow.js';
+import { isLogViewerOpen, closeLogViewer } from './ui.js';
 import { refreshSomaMainMenu } from './menu.js';
+import { bgm } from './audio.js';
+import { isEndingUnlocked } from './ending-dex.js';
 
 function _syncDistractionFree () {
 	const monogatari = window.Monogatari?.default;
@@ -16,10 +19,13 @@ function _installLifecycleHooks () {
 	document.addEventListener ('soma:refresh-menu', () => refreshSomaMainMenu ());
 
 	document.addEventListener ('click', (e) => {
-		if (e.target?.closest?.('[data-action="distraction-free"]')) {
+		const path = e.composedPath ? e.composedPath () : [];
+		const hit = path.some (el => el?.getAttribute?.('data-action') === 'distraction-free')
+			|| !!e.target?.closest?.('[data-action="distraction-free"]');
+		if (hit) {
 			setTimeout (_syncDistractionFree, 0);
 		}
-	});
+	}, true);
 	document.addEventListener ('keydown', (e) => {
 		if (e.key === 'h' || e.key === 'H') {
 			if (e.target?.matches?.('input, textarea, select')) return;
@@ -27,21 +33,47 @@ function _installLifecycleHooks () {
 		}
 	});
 
+	// ESC 키 → 세팅이 아닌 confirmQuit 모달. 캡처 페이즈로 Monogatari 보다 먼저 처리.
+	document.addEventListener ('keydown', (e) => {
+		if (e.key !== 'Escape') return;
+		if (!document.body.classList.contains ('game-active')) return;
+		e.preventDefault ();
+		e.stopImmediatePropagation ();
+		if (isLogViewerOpen ()) {
+			closeLogViewer ();
+			return;
+		}
+		const modal = document.querySelector ('.confirm-modal--visible');
+		if (modal) {
+			modal.querySelector ('.confirm-modal__btn--cancel')?.click ();
+			return;
+		}
+		handleSomaQuit ();
+	}, true);
+
 	if (typeof MutationObserver === 'undefined') return;
 	let _mainScreenWasVisible = false;
+	let _gameWasActive        = false;
 	const observer = new MutationObserver (() => {
 		const mainScreen = document.querySelector ('[data-screen="main"]');
 		const gameScreen = document.querySelector ('[data-screen="game"]');
 		if (!mainScreen || !gameScreen) return;
-		const mainVisible = mainScreen.offsetParent !== null;
-		const gameVisible = gameScreen.offsetParent !== null;
-		if (mainVisible && !gameVisible && document.body.classList.contains ('game-active')) {
+		const mainNowVisible = mainScreen.offsetParent !== null;
+		const gameNowVisible = gameScreen.offsetParent !== null;
+		const gameNowActive  = document.body.classList.contains ('game-active');
+		if (mainNowVisible && !gameNowVisible && gameNowActive) {
 			cleanupCustomUI ();
 		}
-		if (mainVisible && !_mainScreenWasVisible) {
+		if (mainNowVisible && !_mainScreenWasVisible) {
+			bgm (isEndingUnlocked ('ENDING_MARRIAGE') ? 'marr' : 'menu');
 			refreshSomaMainMenu ();
 		}
-		_mainScreenWasVisible = mainVisible;
+		// game-active 클래스 추가(상승 엣지)만 감지 — classList.add 멱등성으로 중복 발화 없음.
+		if (gameNowActive && !_gameWasActive) {
+			bgm (null);
+		}
+		_mainScreenWasVisible = mainNowVisible;
+		_gameWasActive        = gameNowActive;
 	});
 	observer.observe (document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'open', 'data-screen'] });
 
@@ -55,6 +87,25 @@ function _installLifecycleHooks () {
 		});
 		focusedObs.observe (mainScreenEl, { attributes: true, attributeFilter: ['class'] });
 	}
+}
+
+export function ensureMainBtn () {
+	if (document.getElementById ('soma-main-btn')) return;
+	const quickMenu = document.querySelector ('quick-menu');
+	if (!quickMenu) return;
+	const btn = document.createElement ('button');
+	btn.id = 'soma-main-btn';
+	btn.type = 'button';
+	btn.setAttribute ('aria-label', '메인 메뉴로');
+	btn.innerHTML = '<span class="fas fa-home"></span><span data-string>메인</span>';
+	btn.addEventListener ('click', (e) => {
+		e.preventDefault ();
+		e.stopPropagation ();
+		handleSomaQuit ();
+	});
+	const hideBtn = quickMenu.querySelector ('[data-action="distraction-free"]');
+	if (hideBtn) hideBtn.insertAdjacentElement ('afterend', btn);
+	else quickMenu.appendChild (btn);
 }
 
 if (document.readyState === 'loading') {

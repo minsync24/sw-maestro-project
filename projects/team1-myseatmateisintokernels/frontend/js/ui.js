@@ -4,6 +4,7 @@ import {
 	SERA_SPRITE_FILE,
 	SERA_FADE_MS,
 	spriteUrl,
+	sceneUrl,
 	EVENT_LABELS,
 	finiteNumber,
 	API_BASE
@@ -12,35 +13,32 @@ import {
 // ─── 인트로 로고 ───────────────────────────────────────────────────────────────
 
 let _introLogoEl = null;
-export function showIntroLogo () {
-	return new Promise (async (resolve) => {
-		if (_introLogoEl) {
-			_introLogoEl.remove ();
-			_introLogoEl = null;
-		}
-		document.body.classList.add ('intro-active');
-		const overlay = document.createElement ('div');
-		overlay.className = 'intro-logo';
-		overlay.innerHTML = `
-			<div class="intro-logo__inner">
-				<img src="assets/logo/game_logo.jpeg" alt="커널을 좋아하는 옆자리의 그녀" />
-				<div class="intro-logo__subtitle">Software Maestro &times; First Love</div>
-			</div>
-		`;
-		document.body.appendChild (overlay);
-		_introLogoEl = overlay;
-
-		void overlay.offsetWidth;
-		overlay.classList.add ('intro-logo--visible');
-		await new Promise (r => setTimeout (r, 2500));
-		await new Promise (r => setTimeout (r, 2000));
-		overlay.classList.add ('intro-logo--leaving');
-		await new Promise (r => setTimeout (r, 1500));
-		if (overlay.parentNode) overlay.parentNode.removeChild (overlay);
+export async function showIntroLogo () {
+	if (_introLogoEl) {
+		_introLogoEl.remove ();
 		_introLogoEl = null;
-		document.body.classList.remove ('intro-active');
-		resolve ();
-	});
+	}
+	document.body.classList.add ('intro-active');
+	const overlay = document.createElement ('div');
+	overlay.className = 'intro-logo';
+	overlay.innerHTML = `
+		<div class="intro-logo__inner">
+			<img src="assets/logo/game_logo.jpeg" alt="커널을 좋아하는 옆자리의 그녀" />
+			<div class="intro-logo__subtitle">Software Maestro &times; First Love</div>
+		</div>
+	`;
+	document.body.appendChild (overlay);
+	_introLogoEl = overlay;
+
+	void overlay.offsetWidth;
+	overlay.classList.add ('intro-logo--visible');
+	await new Promise (r => setTimeout (r, 3500));
+	overlay.classList.add ('intro-logo--leaving');
+	await new Promise (r => setTimeout (r, 1500));
+	if (overlay.parentNode) overlay.parentNode.removeChild (overlay);
+	_introLogoEl = null;
+	document.body.classList.remove ('intro-active');
+	return true;
 }
 
 // ─── 세라 스프라이트 ───────────────────────────────────────────────────────────
@@ -141,77 +139,6 @@ export function showEventToast (eventId) {
 	setTimeout (() => { if (toast.parentNode) toast.parentNode.removeChild (toast); }, 2500);
 }
 
-// ─── 추천 말풍선 (Suggestions) ─────────────────────────────────────────────────
-
-let _suggestionsStrip = null;
-
-export async function fetchAndRenderSuggestions () {
-	clearSuggestions ();
-	let suggestions = [];
-	try {
-		const res = await fetch (`${API_BASE}/chat/suggestions`, {
-			method: 'GET',
-			credentials: 'include'
-		});
-		if (res.ok) {
-			const json = await res.json ();
-			suggestions = json?.data?.suggestions || [];
-		}
-	} catch (e) {
-	}
-	if (suggestions.length === 0) return;
-	renderSuggestionsStrip (suggestions);
-}
-
-function renderSuggestionsStrip (suggestions) {
-	const game = document.querySelector ('[data-screen="game"]') || document.body;
-	const strip = document.createElement ('div');
-	strip.className = 'llm-suggestions';
-	strip.innerHTML = '<div class="llm-suggestions__label">💡 이렇게 말해볼까요?</div>';
-	const list = document.createElement ('div');
-	list.className = 'llm-suggestions__list';
-	suggestions.forEach (s => {
-		const chip = document.createElement ('button');
-		chip.type = 'button';
-		chip.className = 'llm-suggestions__chip';
-		chip.textContent = s;
-		chip.addEventListener ('click', (ev) => {
-			ev.preventDefault ();
-			ev.stopPropagation ();
-			const ta = document.querySelector ('text-input.llm-input textarea');
-			if (ta) {
-				ta.value = s;
-				ta.dispatchEvent (new Event ('input', { bubbles: true }));
-				ta.focus ();
-			}
-		});
-		list.appendChild (chip);
-	});
-	const refresh = document.createElement ('button');
-	refresh.type = 'button';
-	refresh.className = 'llm-suggestions__refresh';
-	refresh.title = '추천 다시 받기';
-	refresh.setAttribute ('aria-label', '추천 다시 받기');
-	refresh.textContent = 'R';
-	refresh.addEventListener ('click', (ev) => {
-		ev.preventDefault ();
-		ev.stopPropagation ();
-		fetchAndRenderSuggestions ();
-	});
-	list.appendChild (refresh);
-	strip.appendChild (list);
-	game.appendChild (strip);
-	_suggestionsStrip = strip;
-}
-
-export function clearSuggestions () {
-	if (_suggestionsStrip && _suggestionsStrip.parentNode) {
-		_suggestionsStrip.parentNode.removeChild (_suggestionsStrip);
-	}
-	_suggestionsStrip = null;
-	document.querySelectorAll ('.llm-suggestions').forEach (n => n.remove ());
-}
-
 // ─── 타이프라이터 ─────────────────────────────────────────────────────────────
 
 export function typewriteAndAwait (text, opts = {}) {
@@ -271,6 +198,174 @@ export function typewriteAndAwait (text, opts = {}) {
 	});
 }
 
+// ─── 엔딩 크레딧 오버레이 ──────────────────────────────────────────────────────
+
+export const BADGE_MAP = {
+	'ENDING_MARRIAGE':          { cls: 'marriage', text: '결혼 해피엔딩' },
+	'ENDING_HAPPY':             { cls: 'happy',    text: '해피엔딩' },
+	'ENDING_NORMAL_CONTACT':    { cls: 'normal',   text: '노멀엔딩' },
+	'ENDING_NORMAL_NO_CONTACT': { cls: 'normal',   text: '노멀엔딩' },
+	'ENDING_BAD':               { cls: 'bad',      text: '배드엔딩' },
+	'ENDING_INSTANT_BAD':       { cls: 'bad',      text: '배드엔딩' }
+};
+
+let _endCreditsBackdrop = null;
+
+export function lockToBlack () {
+	if (_endCreditsBackdrop) return;
+	const backdrop = document.createElement ('div');
+	backdrop.className = 'end-credits-backdrop';
+	document.body.appendChild (backdrop);
+	_endCreditsBackdrop = backdrop;
+}
+
+export function showEndCredits (ending, playerName) {
+	const backdrop = _endCreditsBackdrop;
+	ending = ending || {};
+	const stats = ending.stats || {};
+	const finalAffinity = ending.final_affinity ?? '?';
+	const totalChats    = stats.total_chats  ?? '?';
+	const maxAffinity   = stats.max_affinity  ?? '?';
+	const minAffinity   = stats.min_affinity  ?? '?';
+
+	const eventTexts = (stats.events_triggered || [])
+		.map (id => EVENT_LABELS[id]?.text)
+		.filter (Boolean);
+
+	const badge = BADGE_MAP[ending.ending_id] || { cls: 'normal', text: ending.title || '' };
+
+	const affinityNum = typeof finalAffinity === 'number' ? finalAffinity : null;
+	const affinityClass = affinityNum !== null
+		? (affinityNum >= 1 ? ' end-credits__stat-value--pos' : affinityNum < 0 ? ' end-credits__stat-value--neg' : '')
+		: '';
+
+	const eventsHtml = eventTexts.length
+		? `<div class="end-credits__events">${eventTexts.map (t => `<span class="end-credits__event-chip">${escapeDialogText (t)}</span>`).join ('')}</div>`
+		: '';
+
+	const overlay = document.createElement ('div');
+	overlay.className = 'end-credits';
+	overlay.innerHTML = `
+		<div class="end-credits__inner">
+			<div class="end-credits__kicker">이야기의 끝에서</div>
+			<h2 class="end-credits__title">${escapeDialogText (playerName)}의 이야기</h2>
+			<div class="end-credits__badge end-credits__badge--${badge.cls}">${badge.text}</div>
+			<div class="end-credits__divider"></div>
+			<div class="end-credits__stats">
+				<div class="end-credits__stat">
+					<span class="end-credits__stat-label">최종 호감도</span>
+					<span class="end-credits__stat-value${affinityClass}">${finalAffinity}</span>
+				</div>
+				<div class="end-credits__stat">
+					<span class="end-credits__stat-label">총 대화 횟수</span>
+					<span class="end-credits__stat-value">${totalChats}회</span>
+				</div>
+				<div class="end-credits__stat">
+					<span class="end-credits__stat-label">최고 호감도</span>
+					<span class="end-credits__stat-value">${maxAffinity}</span>
+				</div>
+				<div class="end-credits__stat">
+					<span class="end-credits__stat-label">최저 호감도</span>
+					<span class="end-credits__stat-value">${minAffinity}</span>
+				</div>
+			</div>
+			${eventsHtml}
+			<div class="end-credits__fin">— fin —</div>
+			<button class="end-credits__close">닫기</button>
+		</div>
+	`;
+
+	document.body.appendChild (overlay);
+	requestAnimationFrame (() => overlay.classList.add ('end-credits--visible'));
+
+	return new Promise ((resolve) => {
+		overlay.querySelector ('.end-credits__close').addEventListener ('click', () => {
+			overlay.classList.add ('end-credits--leaving');
+			setTimeout (() => {
+				if (overlay.parentNode) overlay.parentNode.removeChild (overlay);
+				if (backdrop && backdrop.parentNode) backdrop.parentNode.removeChild (backdrop);
+				_endCreditsBackdrop = null;
+				resolve ();
+			}, 500);
+		});
+	});
+}
+
+// ─── 엔딩 이미지 표시 + 클릭 대기 + 페이드아웃 ─────────────────────────────
+// bgKey 에 해당하는 이미지를 풀스크린 오버레이로 페이드인 → 클릭 대기 →
+// 검은 베일 페이드인 → 오버레이 제거까지 전부 책임진다.
+// 호출 전 Monogatari 씬을 fade_black 으로 고정해 두어야 페이드아웃이 자연스럽다.
+export function showEndingImage (bgKey, fadeInMs, fadeOutMs) {
+	const url = sceneUrl (bgKey);
+	return new Promise ((resolve) => {
+		document.body.classList.add ('ending-image-hold');
+
+		const overlay = document.createElement ('div');
+		Object.assign (overlay.style, {
+			position:           'fixed',
+			inset:              '0',
+			zIndex:             '9300',
+			backgroundImage:    url ? `url('${url}')` : 'none',
+			backgroundSize:     'contain',
+			backgroundColor:    '#000',
+			backgroundRepeat:   'no-repeat',
+			backgroundPosition: 'center',
+			opacity:            '0',
+			cursor:             'pointer'
+		});
+		document.body.appendChild (overlay);
+
+		requestAnimationFrame (() => requestAnimationFrame (() => {
+			overlay.style.transition = `opacity ${fadeInMs}ms ease`;
+			overlay.style.opacity = '1';
+		}));
+
+		let ready = false;
+		let finishing = false;
+		setTimeout (() => { ready = true; }, fadeInMs);
+
+		const finish = () => {
+			if (!ready || finishing) return;
+			finishing = true;
+			overlay.removeEventListener ('click', finish);
+			overlay.style.cursor = 'default';
+
+			const veil = document.createElement ('div');
+			Object.assign (veil.style, {
+				position:   'absolute',
+				inset:      '0',
+				background: '#000',
+				opacity:    '0'
+			});
+			overlay.appendChild (veil);
+			requestAnimationFrame (() => requestAnimationFrame (() => {
+				veil.style.transition = `opacity ${fadeOutMs}ms ease`;
+				veil.style.opacity = '1';
+			}));
+
+			setTimeout (() => {
+				document.removeEventListener ('keydown', onKey, true);
+				document.body.classList.remove ('ending-image-hold');
+				if (overlay.parentNode) overlay.parentNode.removeChild (overlay);
+				resolve (true);
+			}, fadeOutMs);
+		};
+
+		const onKey = (e) => {
+			if (e.isComposing || e.keyCode === 229) return;
+			if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowRight') {
+				e.preventDefault ();
+				finish ();
+			} else if (e.key === 'ArrowLeft') {
+				e.preventDefault ();
+				e.stopImmediatePropagation ();
+			}
+		};
+		overlay.addEventListener ('click', finish);
+		document.addEventListener ('keydown', onKey, true);
+	});
+}
+
 // ─── 모달 (confirm) ─────────────────────────────────────────────────────────
 
 function _confirmModal ({ title, body, ok = 'OK', cancel = 'Cancel' }) {
@@ -315,6 +410,66 @@ export function confirmQuit () {
 		body:   '현재 진행 상황은 자동으로 저장돼요. 메인 메뉴에서 다시 이어 할 수 있어요.',
 		ok:     '나가기',
 		cancel: '취소'
+	});
+}
+
+function _inputModal ({ title, body, placeholder = '0', ok = 'OK', cancel = 'Cancel' }) {
+	return new Promise ((resolve) => {
+		const overlay = document.createElement ('div');
+		overlay.className = 'confirm-modal';
+		overlay.innerHTML = `
+			<div class="confirm-modal__panel" role="alertdialog">
+				<div class="confirm-modal__title">${escapeDialogText (title || '')}</div>
+				<div class="confirm-modal__body">${escapeDialogText (body || '')}</div>
+				<input type="text" inputmode="numeric" class="confirm-modal__input"
+				       placeholder="${escapeDialogText (String (placeholder))}" />
+				<div class="confirm-modal__buttons">
+					<button type="button" class="confirm-modal__btn confirm-modal__btn--cancel">${escapeDialogText (cancel)}</button>
+					<button type="button" class="confirm-modal__btn confirm-modal__btn--ok">${escapeDialogText (ok)}</button>
+				</div>
+			</div>
+		`;
+		document.body.appendChild (overlay);
+		void overlay.offsetWidth;
+		overlay.classList.add ('confirm-modal--visible');
+		const input = overlay.querySelector ('.confirm-modal__input');
+		input.focus ();
+		const close = (value) => {
+			overlay.classList.remove ('confirm-modal--visible');
+			setTimeout (() => { if (overlay.parentNode) overlay.parentNode.removeChild (overlay); }, 250);
+			resolve (value);
+		};
+		overlay.querySelector ('.confirm-modal__btn--cancel').addEventListener ('click', () => close (null));
+		const parseAndClose = () => {
+			const v = input.value.trim ();
+			if (v === '') { close (null); return; }
+			const n = Number (v);
+			if (isNaN (n) || n < -100 || n > 100) {
+				input.classList.add ('confirm-modal__input--error');
+				input.select ();
+				return;
+			}
+			close (n);
+		};
+		overlay.querySelector ('.confirm-modal__btn--ok').addEventListener ('click', parseAndClose);
+		input.addEventListener ('input', () => input.classList.remove ('confirm-modal__input--error'));
+		input.addEventListener ('keydown', (e) => {
+			if (e.key === 'Enter') {
+				parseAndClose ();
+			} else if (e.key === 'Escape') {
+				close (null);
+			}
+		});
+	});
+}
+
+export function promptAffinityInput () {
+	return _inputModal ({
+		title:       '엔딩 점프 (개발용)',
+		body:        '진입할 호감도 수치를 입력하세요.',
+		placeholder: '0',
+		ok:          '점프',
+		cancel:      '취소',
 	});
 }
 
